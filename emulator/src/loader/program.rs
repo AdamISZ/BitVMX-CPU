@@ -629,7 +629,8 @@ impl Program {
                     .chunks(chunk_size as usize)
                     .enumerate()
                     .map(|(index, chunk)| {
-                        let offset = section.start + index as u32 * chunk_size;
+                        // chunk_size is in words: each chunk spans chunk_size * 4 bytes
+                        let offset = section.start + index as u32 * chunk_size * 4;
                         let data = chunk.iter().map(|opcode| u32::from_be(*opcode)).collect();
                         Chunk {
                             base_addr: offset,
