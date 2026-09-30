@@ -642,9 +642,27 @@ impl Program {
     }
 
     pub fn get_initialized_chunks(&self, chunk_size: u32) -> Vec<Chunk> {
-        self.get_chunks(chunk_size, |section| {
+        let mut chunks = self.get_chunks(chunk_size, |section| {
             section.initialized && !section.is_code
-        })
+        });
+        // The registers are initialized by the loader (sp is not zero), but
+        // their section's data is not where their values live: take them
+        // from the registers themselves.
+        if let Some(section) = self.sections.iter().find(|section| section.registers) {
+            let values: Vec<u32> = (0..section.size / 4)
+                .map(|idx| self.registers.get(idx))
+                .collect();
+            chunks.extend(
+                values
+                    .chunks(chunk_size as usize)
+                    .enumerate()
+                    .map(|(index, data)| Chunk {
+                        base_addr: section.start + index as u32 * chunk_size * 4,
+                        data: data.to_vec(),
+                    }),
+            );
+        }
+        chunks
     }
 
     pub fn get_code_chunks(&self, chunk_size: u32) -> Vec<Chunk> {
@@ -659,8 +677,11 @@ impl Program {
             .sections
             .iter()
             .filter(|section| {
-                // we do inputs separately
-                !section.initialized && section.name != program_definition.input_section_name
+                // we do inputs separately; the registers are initialized by
+                // the loader (see get_initialized_chunks)
+                !section.initialized
+                    && !section.registers
+                    && section.name != program_definition.input_section_name
             })
             .map(|section| section.range())
             .collect();

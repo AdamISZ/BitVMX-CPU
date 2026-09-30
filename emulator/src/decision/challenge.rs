@@ -724,7 +724,7 @@ pub fn verifier_choose_challenge(
                     address: conflict_address,
                     input_for_address: value,
                 });
-            } else if (section.initialized && force == ForceChallenge::No)
+            } else if ((section.initialized || section.registers) && force == ForceChallenge::No)
                 || force == ForceChallenge::InitializedData
             {
                 info!("Verifier choose to challenge invalid INITIALIZED DATA");
@@ -2880,5 +2880,36 @@ mod tests {
             sections: Some(program.get_uninitialized_ranges(&program_def)),
         };
         assert!(!execute_challenge(&challenge));
+    }
+
+    // With the registers as initialized data, a never-written register read
+    // is checked against the loader's value: the honest sp at hello-world's
+    // step 3 is not challengeable, a wrong one is.
+    #[test]
+    fn test_initialized_challenge_register_read() {
+        init_trace();
+        let pdf = "../docker-riscv32/riscv32/build/hello-world.yaml";
+        let path = "../temp-runs/challenge/initialized-register/";
+        let input = vec![17, 17, 17, 17];
+        prover_execute(pdf, input.clone(), path, path, true, None, false).unwrap();
+        let program_def = ProgramDefinition::from_config(pdf).unwrap();
+        let (_, trace) = program_def
+            .execute_helper(path, path, input, Some(vec![2, 3]), None, false)
+            .unwrap();
+        let step_3 = &trace[1].0;
+        let program = program_def.load_program().unwrap();
+        let chunks = program.get_initialized_chunks(bitvmx_cpu_definitions::constants::CHUNK_SIZE);
+        let chunk_index = super::find_chunk_index(&chunks, step_3.read_1.address).unwrap();
+        let challenge = |read_1: TraceRead| ChallengeType::InitializedData {
+            prover_read_1: read_1,
+            prover_read_2: step_3.read_2.clone(),
+            read_selector: 1,
+            chunk_index: chunk_index as u32,
+            chunk: Some(chunks[chunk_index].clone()),
+        };
+        assert!(!execute_challenge(&challenge(step_3.read_1.clone())));
+        let mut lie = step_3.read_1.clone();
+        lie.value ^= 1;
+        assert!(execute_challenge(&challenge(lie)));
     }
 }
