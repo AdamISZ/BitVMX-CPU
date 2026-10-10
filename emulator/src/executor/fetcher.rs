@@ -141,10 +141,11 @@ pub fn execute_program(
                 .trace_step
                 .to_bytes();
 
-            program.hash = next_step_hash(program, &mut hasher, &trace_bytes);
+            let wrong_jump = fail_config.fail_jump == Some(program.step);
+            program.hash = next_step_hash(program, &mut hasher, &trace_bytes, wrong_jump);
             if let Some(fail) = fail_config.fail_hash {
                 if fail == program.step {
-                    program.hash = next_step_hash(program, &mut hasher, &trace_bytes);
+                    program.hash = next_step_hash(program, &mut hasher, &trace_bytes, false);
                 }
             }
         }
@@ -1138,11 +1139,11 @@ pub fn op_upper(
 
 /// The hash after the step just executed: linear, or a jump list's (which
 /// then records it if it is a long jump's target).
-fn next_step_hash(program: &mut Program, hasher: &mut blake3::Hasher, trace_bytes: &[u8]) -> [u8; 20] {
+fn next_step_hash(program: &mut Program, hasher: &mut blake3::Hasher, trace_bytes: &[u8], wrong_jump: bool) -> [u8; 20] {
     match program.jump.as_mut() {
         None => compute_step_hash(hasher, &program.hash, trace_bytes),
         Some(jt) => {
-            let j = jt.jump_hash(program.step, &program.hash);
+            let j = if wrong_jump { [0; 20] } else { jt.jump_hash(program.step, &program.hash) };
             let h = bitvmx_cpu_definitions::trace::compute_step_hash_jump(hasher, &program.hash, &j, trace_bytes, program.step);
             jt.record(program.step, &h);
             h

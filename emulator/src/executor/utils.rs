@@ -245,6 +245,10 @@ pub struct FailConfiguration {
     pub fail_commitment_hash: bool,
     pub fail_selection_bits: Option<FailSelectionBits>,
     pub fail_prover_challenge_step: bool,
+    /// A jump list's step committing to a wrong long-jump hash (zeros) at
+    /// this step.
+    #[serde(default)]
+    pub fail_jump: Option<u64>,
 }
 
 impl FailConfiguration {

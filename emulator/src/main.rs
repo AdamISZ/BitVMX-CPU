@@ -558,6 +558,7 @@ fn main() -> Result<(), EmulatorError> {
                 fail_commitment_hash: *fail_commitment_hash,
                 fail_selection_bits: None,
                 fail_prover_challenge_step: false,
+                fail_jump: None,
             };
             let result = execute_program(
                 &mut program,
