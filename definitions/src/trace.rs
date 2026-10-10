@@ -241,3 +241,124 @@ pub fn hash_to_string(hash: &[u8; 20]) -> String {
         .map(|byte| format!("{:02x}", byte))
         .collect::<String>()
 }
+
+/// The authenticated jump list (S. D. Lerner, "Latest innovations in
+/// BitVMX", June 2024), an opt-in replacement for the linear step-hash
+/// chain: `h(i) = BLAKE3(h(i-1) || h(jump(i)) || write_i || i)[..20]`, so
+/// that any step reaches any earlier one in a few times `log2(n)` hops and
+/// a read's last write can be shown in one round instead of a second
+/// search.
+///
+/// A step number is a word of `bits` bits, the low `counter` of them a
+/// counter `c`, the rest data. If `c` selects a data bit that is set, the
+/// long jump is to the number with bit `c` cleared, the data bits below it
+/// set and the counter kept, less one; otherwise to the previous step.
+///
+/// The executor keeps, for each data bit `B` and counter value, the hash
+/// of the latest step whose bit `B` is clear and whose data bits below it
+/// are all set: exactly the long jumps' targets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JumpTable {
+    pub bits: u32,
+    pub counter: u32,
+    table: Vec<[u8; 20]>,
+}
+
+impl JumpTable {
+    /// For steps below `2^bits`, with step 0's hash `h0` recorded.
+    pub fn new(bits: u32, h0: &[u8; 20]) -> JumpTable {
+        let counter = 32 - (bits - 1).leading_zeros();
+        assert!(bits > counter, "a word of {bits} bits leaves no data bits");
+        let mut t = JumpTable { bits, counter, table: vec![[0; 20]; ((bits - counter) as usize) << counter] };
+        t.record(0, h0);
+        t
+    }
+
+    /// Step `i`'s long jump (`i - 1` if it has none), `i >= 1`.
+    pub fn jump(&self, i: u64) -> u64 {
+        let c = (i & ((1 << self.counter) - 1)) as u32;
+        if c < self.counter || c >= self.bits || (i >> c) & 1 == 0 {
+            return i - 1;
+        }
+        let above = (i >> (c + 1)) << (c + 1);
+        let data_below = ((1u64 << c) - 1) & !((1u64 << self.counter) - 1);
+        (above | data_below | u64::from(c)) - 1
+    }
+
+    fn index(&self, bit: u32, ctr: u64) -> usize {
+        (((bit - self.counter) as usize) << self.counter) + ctr as usize
+    }
+
+    /// The hash step `i` commits to besides its predecessor's: its long
+    /// jump's, or `prev` (its predecessor's) if it has none.
+    pub fn jump_hash(&self, i: u64, prev: &[u8; 20]) -> [u8; 20] {
+        let c = (i & ((1 << self.counter) - 1)) as u32;
+        if self.jump(i) == i - 1 {
+            *prev
+        } else {
+            self.table[self.index(c, u64::from(c - 1))]
+        }
+    }
+
+    /// Record step `x`'s hash if `x` is a long jump's target.
+    pub fn record(&mut self, x: u64, hash: &[u8; 20]) {
+        let ctr = x & ((1 << self.counter) - 1);
+        let bit = self.counter + (x >> self.counter).trailing_ones();
+        if bit < self.bits {
+            let k = self.index(bit, ctr);
+            self.table[k] = *hash;
+        }
+    }
+}
+
+/// A jump-list step hash: `BLAKE3(prev || jump || write_trace || step)`,
+/// the step as 4 big-endian bytes.
+pub fn compute_step_hash_jump(
+    hasher: &mut Hasher,
+    previous_hash: &[u8; 20],
+    jump_hash: &[u8; 20],
+    write_trace: &[u8],
+    step: u64,
+) -> [u8; 20] {
+    hasher.reset();
+    hasher.update(previous_hash);
+    hasher.update(jump_hash);
+    hasher.update(write_trace);
+    hasher.update(&(step as u32).to_be_bytes());
+    let mut output = [0u8; 20];
+    hasher.finalize_xof().fill(&mut output);
+    output
+}
+
+/// [`validate_step_hash`] for a jump list: the hash after `step` from the
+/// hash before it, its long jump's hash and its write.
+pub fn validate_step_hash_jump(hash: &str, jump_hash: &str, step: &TraceStep, step_number: u64, next_hash: &str) -> bool {
+    let h: [u8; 20] = hex::decode(hash).expect("Invalid hex string").try_into().expect("20 bytes");
+    let j: [u8; 20] = hex::decode(jump_hash).expect("Invalid hex string").try_into().expect("20 bytes");
+    let mut hasher = blake3::Hasher::new();
+    hex::encode(compute_step_hash_jump(&mut hasher, &h, &j, &step.to_bytes(), step_number)) == next_hash
+}
+
+#[cfg(test)]
+mod jump_tests {
+    use super::*;
+
+    /// The table's answer is the long jump's target's hash, for every step
+    /// of a small word.
+    #[test]
+    fn the_table_finds_each_long_jump() {
+        let bits = 11;
+        let h = |x: u64| -> [u8; 20] {
+            let mut b = [0u8; 20];
+            b[..8].copy_from_slice(&x.to_be_bytes());
+            b
+        };
+        let mut t = JumpTable::new(bits, &h(0));
+        for i in 1..(1u64 << bits) {
+            let j = t.jump(i);
+            assert!(j < i);
+            assert_eq!(t.jump_hash(i, &h(i - 1)), h(j), "step {i}: its jump {j}");
+            t.record(i, &h(i));
+        }
+    }
+}

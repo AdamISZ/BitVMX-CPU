@@ -40,6 +40,10 @@ pub struct ProgramDefinition {
     pub max_steps: u64,
     pub input_section_name: String,
     pub inputs: Vec<InputDefinition>,
+    /// Hash the trace as an authenticated jump list (`JumpTable`) instead
+    /// of a linear chain.
+    #[serde(default)]
+    pub jump_list: bool,
 }
 
 impl ProgramDefinition {
@@ -57,7 +61,12 @@ impl ProgramDefinition {
         //extract the path from config path and concat with elf
         let elf_path = self.config_path.split("/").collect::<Vec<&str>>();
         let elf_file = format!("{}/{}", elf_path[..elf_path.len() - 1].join("/"), self.elf);
-        load_elf(&elf_file, false)
+        let mut program = load_elf(&elf_file, false)?;
+        if self.jump_list {
+            let bits = self.nary_def().max_steps.trailing_zeros();
+            program.jump = Some(bitvmx_cpu_definitions::trace::JumpTable::new(bits, &program.hash));
+        }
+        Ok(program)
     }
 
     pub fn load_program_from_checkpoint(

@@ -501,8 +501,25 @@ pub fn verifier_choose_challenge(
         });
     }
 
-    // check trace_hash
-    if (!validate_step_hash(&prover_step_hash, &trace.trace_step, &prover_next_hash)
+    // check trace_hash (a jump list's against the verifier's own hash at the
+    // disputed step's long jump)
+    let hash_ok = if program_def.jump_list {
+        let jt = bitvmx_cpu_definitions::trace::JumpTable::new(nary_def.max_steps.trailing_zeros(), &[0; 20]);
+        let target = jt.jump(step + 1);
+        let jump_hash = if target == step {
+            prover_step_hash.clone()
+        } else {
+            program_def
+                .execute_helper(input_checkpoint_path, output_checkpoint_path, verifier_log.input.clone(), Some(vec![target]), fail_config.clone(), false)?
+                .1[0]
+                .1
+                .clone()
+        };
+        bitvmx_cpu_definitions::trace::validate_step_hash_jump(&prover_step_hash, &jump_hash, &trace.trace_step, step + 1, &prover_next_hash)
+    } else {
+        validate_step_hash(&prover_step_hash, &trace.trace_step, &prover_next_hash)
+    };
+    if (!hash_ok
         && force == ForceChallenge::No)
         || force == ForceChallenge::TraceHash
         || force == ForceChallenge::TraceHashZero

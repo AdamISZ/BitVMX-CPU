@@ -192,6 +192,9 @@ pub struct Program {
     pub pc: ProgramCounter,
     pub step: u64,
     pub hash: [u8; 20],
+    /// The jump list's table, if the trace is hashed as one.
+    #[serde(default)]
+    pub jump: Option<bitvmx_cpu_definitions::trace::JumpTable>,
     pub halt: bool,
     pub read_write_sections: SectionDefinition,
     pub read_only_sections: SectionDefinition,
@@ -252,6 +255,7 @@ impl Program {
             hash: generate_initial_step_hash()
                 .try_into()
                 .expect("Invalid hash size"),
+            jump: None,
             halt: false,
             read_write_sections: SectionDefinition::default(),
             read_only_sections: SectionDefinition::default(),
